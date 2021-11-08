@@ -1,7 +1,7 @@
 import capstone as cp
 from elftools.elf.elffile import ELFFile
 import bisect
-from diffObjdump import DiffObjdump
+from diffObjdump import DiffObjdump, FunctionFeatures
 
 class Objdump:
   def __init__(self, filename):
@@ -12,8 +12,8 @@ class Objdump:
 
   def __mount_symbols_list(self):
     dot_text_section = self.__elf.get_section_by_name('.text')
-    local_code_begin = dot_text_section['sh_addr']
-    local_code_end = local_code_begin + dot_text_section.data_size
+    self.__local_code_begin = dot_text_section['sh_addr']
+    self.__local_code_end = self.__local_code_begin + dot_text_section.data_size
 
     # stores all local function names
     self.__local_symbols = dict()
@@ -33,8 +33,8 @@ class Objdump:
       # Ensures that it is getting only functions that have its body inside
       # '.text' section at the ELF file
       if(sym.entry['st_info']['type'] == 'STT_FUNC'
-      and addr >= local_code_begin
-      and addr < local_code_end):
+      and addr >= self.__local_code_begin
+      and addr < self.__local_code_end):
         self.__local_symbols[sym.name] = []
         local_symbols_address.append((addr, sym.name))
     
@@ -46,7 +46,7 @@ class Objdump:
         
         # Ensures that it is getting only functions that have its body inside
         # '.text' section at the ELF file
-        if(addr >= local_code_begin and addr < local_code_end):
+        if(addr >= self.__local_code_begin and addr < self.__local_code_end):
           self.__local_symbols[sym.name] = []
           local_symbols_address.append((addr, sym.name))
     
@@ -99,14 +99,26 @@ class Objdump:
 
   def get_function_name_by_address(self, address):
     # binary search to get which function {address} corresponds to.
-    idx = bisect.bisect_left(self.__local_symbols_address, (address, ""))
-    if(address < self.__local_symbols_address[idx][0]):
-      idx -= 1
-    
-    if(idx < 0):
-      return None
-    else:
+    if(address >= self.__local_code_begin and address < self.__local_code_end):
+      idx = bisect.bisect_left(self.__local_symbols_address, (address, ""))
+      if(address < self.__local_symbols_address[idx][0]):
+        idx -= 1
       return self.__local_symbols_address[idx][1]
+    else:
+      if(len(self.__global_symbols_address) == 0):
+        return None
+      # possible bug:
+      # if {address} is too long and is out of the last funcion of
+      # {self.__global_symbols_addres}, the following binary search will return
+      # the name of last function in {self.__global_symbols_address}
+      idx = bisect.bisect_left(self.__global_symbols_address, (address, ""))
+      if(address < self.__global_symbols_address[idx][0]):
+        idx -= 1
+      if(idx < 0):
+        return None
+      else:
+        return self.__global_symbols_address[idx][1]
+
 
   def get_function_names(self):
     return self.__local_symbols.keys()
@@ -116,9 +128,17 @@ class Objdump:
       return self.__local_symbols[func_name]
     return []
 
+  def print_instructions(self):
+    j = 0
+    for (addr, name) in self.__local_symbols_address:
+      print(FunctionFeatures(name, self))
+      j+=1
+      if(j > 6): break
+
 import sys
 dmp = Objdump(sys.argv[1])
+dmp.print_instructions()
 # print(dmp.get_function_name_by_address(243790))
-# print(dmp.get_function_name_by_address(243792))
-diff = DiffObjdump(dmp, dmp)
-diff.diff_report()
+# print(dmp.get_function_name_by_address(243793))
+# diff = DiffObjdump(dmp, dmp)
+# diff.diff_report()
