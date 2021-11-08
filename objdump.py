@@ -1,6 +1,7 @@
 import capstone as cp
 from elftools.elf.elffile import ELFFile
 import bisect
+from diffObjdump import DiffObjdump
 
 class Objdump:
   def __init__(self, filename):
@@ -110,7 +111,14 @@ class Objdump:
   def get_function_names(self):
     return self.__local_symbols.keys()
 
+  def get_function_instructions(self, func_name):
+    if func_name in self.__local_symbols:
+      return self.__local_symbols[func_name]
+    return []
+
 import sys
 dmp = Objdump(sys.argv[1])
-print(dmp.get_function_name_by_address(243790))
-print(dmp.get_function_name_by_address(243792))
+# print(dmp.get_function_name_by_address(243790))
+# print(dmp.get_function_name_by_address(243792))
+diff = DiffObjdump(dmp, dmp)
+diff.diff_report()
