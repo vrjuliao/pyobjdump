@@ -1,19 +1,35 @@
 import capstone as cp
 from elftools.elf.elffile import ELFFile
 import bisect
-from diffObjdump import DiffObjdump, FunctionFeatures
+from diffObjdump import FunctionFeatures
 
 class Objdump:
+  __local_code_begin = 0
+  __local_code_end = 0
+  __linked_code_begin = 0
+  __linked_code_end = 0
+
   def __init__(self, filename):
+    self.__name = filename
     with open(filename, 'rb') as f:
       self.__elf = ELFFile(f)
       self.__mount_symbols_list()
       self.__parse_local_functions()
 
+  @property
+  def name(self):
+    return self.__name
+
   def __mount_symbols_list(self):
+    # getting .text section bounds
     dot_text_section = self.__elf.get_section_by_name('.text')
     self.__local_code_begin = dot_text_section['sh_addr']
     self.__local_code_end = self.__local_code_begin + dot_text_section.data_size
+
+    # getting .plt (procedure linkage table) section bounds
+    dot_plt_section = self.__elf.get_section_by_name('.plt')
+    self.__linked_code_begin = dot_plt_section['sh_addr']
+    self.__linked_code_end = self.__linked_code_begin + dot_plt_section.data_size
 
     # stores all local function names
     self.__local_symbols = dict()
@@ -33,8 +49,7 @@ class Objdump:
       # Ensures that it is getting only functions that have its body inside
       # '.text' section at the ELF file
       if(sym.entry['st_info']['type'] == 'STT_FUNC'
-      and addr >= self.__local_code_begin
-      and addr < self.__local_code_end):
+      and self.__is_local_code(addr)):
         self.__local_symbols[sym.name] = []
         local_symbols_address.append((addr, sym.name))
     
@@ -42,11 +57,14 @@ class Objdump:
     for _, sym in enumerate(global_symtab.iter_symbols()):
       addr = sym.entry['st_value']
       if(sym.entry['st_info']['type'] == 'STT_FUNC'):
-        self.__global_symbols_address.append((addr, sym.name))
+        # Ensures that it is getting only functions that have its body inside
+        # '.plt' section at the ELF file
+        if(self.__is_linked_code(addr)):
+          self.__global_symbols_address.append((addr, sym.name))
         
         # Ensures that it is getting only functions that have its body inside
         # '.text' section at the ELF file
-        if(addr >= self.__local_code_begin and addr < self.__local_code_end):
+        elif(self.__is_local_code(addr)):
           self.__local_symbols[sym.name] = []
           local_symbols_address.append((addr, sym.name))
     
@@ -56,9 +74,18 @@ class Objdump:
     self.__global_symbols_address.sort()
     local_symbols_address.sort()
 
-    # TODO: revomve duplications from local_symbols_address
+    # some functions are declared in both scopes: .plt and .text, so we are
+    # removing that duplication
     self.__local_symbols_address = self.__remove_local_address_duplications(local_symbols_address)
   
+  def __is_linked_code(self, address):
+    return (address >= self.__linked_code_begin
+      and address < self.__linked_code_end)
+  
+  def __is_local_code(self, address):
+    return (address >= self.__local_code_begin
+      and address < self.__local_code_end)
+
   def __remove_local_address_duplications(self, local_symbols):
     num_of_functions = len(local_symbols)
     result = list()
@@ -76,7 +103,6 @@ class Objdump:
     asm_code = code.data()
     start_header_addr = code['sh_addr']
     
-
     # The capstone Cs creation can be automated dinamically using the following methods and attributes:
       # self.__elf.get_machine_arch()
       # self.__elf.little_endian
@@ -99,26 +125,22 @@ class Objdump:
 
   def get_function_name_by_address(self, address):
     # binary search to get which function {address} corresponds to.
-    if(address >= self.__local_code_begin and address < self.__local_code_end):
+    if(self.__is_local_code(address) and len(self.__local_symbols_address) > 0):
       idx = bisect.bisect_left(self.__local_symbols_address, (address, ""))
       if(address < self.__local_symbols_address[idx][0]):
         idx -= 1
-      return self.__local_symbols_address[idx][1]
-    else:
-      if(len(self.__global_symbols_address) == 0):
+      if(idx < 0):
         return None
-      # possible bug:
-      # if {address} is too long and is out of the last funcion of
-      # {self.__global_symbols_addres}, the following binary search will return
-      # the name of last function in {self.__global_symbols_address}
+      return self.__local_symbols_address[idx][1]
+    elif (self.__is_linked_code(address) and len(self.__global_symbols_address) > 0):
       idx = bisect.bisect_left(self.__global_symbols_address, (address, ""))
       if(address < self.__global_symbols_address[idx][0]):
         idx -= 1
       if(idx < 0):
         return None
-      else:
-        return self.__global_symbols_address[idx][1]
-
+      return self.__global_symbols_address[idx][1]
+    else:
+      return None
 
   def get_function_names(self):
     return self.__local_symbols.keys()
@@ -128,17 +150,7 @@ class Objdump:
       return self.__local_symbols[func_name]
     return []
 
+  # for debugging purposes
   def print_instructions(self):
-    j = 0
-    for (addr, name) in self.__local_symbols_address:
+    for (_, name) in self.__local_symbols_address:
       print(FunctionFeatures(name, self))
-      j+=1
-      if(j > 6): break
-
-import sys
-dmp = Objdump(sys.argv[1])
-dmp.print_instructions()
-# print(dmp.get_function_name_by_address(243790))
-# print(dmp.get_function_name_by_address(243793))
-# diff = DiffObjdump(dmp, dmp)
-# diff.diff_report()
